@@ -1,0 +1,248 @@
+import numbers
+import collections
+from dataclasses import dataclass
+import copy
+import re
+def isNumber(var):
+	return isinstance(var,numbers.Number)
+@dataclass(eq=True,order=True)
+class Symbol():
+	def __init__(self, symbol : str,allowMoreThanOneChar=False):
+		if(isinstance(symbol,Symbol)):
+			self.symbol = symbol.symbol
+			return
+		assert isinstance(symbol,str) and len(symbol)!=0,"Invalid Symbol"
+		assert (allowMoreThanOneChar or len(symbol)==1), "Symbols must be only one character long unless this restriction is overriden."
+		assert symbol.isalpha(),"Symbols must only contain letters."
+		self.symbol = symbol
+	def __str__(self):
+		return self.symbol
+	def __hash__(self):
+		return hash(self.symbol)
+	def __repr__(self):
+		return self.symbol
+def isSymbol(var):
+	return isinstance(var,Symbol)
+def isTerm(var):
+	return isinstance(var,Term)
+def convertableToSymbol(var):
+	if(isSymbol(var)): return True
+	try:
+		Symbol(var)
+	except Exception as e:
+		print(e)
+		return False,e
+	return True,"No error"
+class Term():
+	def __init__(self,components=None):
+		self.symbols = dict()
+		self.number = 1
+		if components == None:
+			return
+		if isTerm(components):
+			self.symbols = components.symbols.copy()
+			self.number = components.number
+			return
+		if(not hasattr(components,"__iter__")):
+			components = (components,)
+		for component in components:
+			if(isNumber(component)):
+
+				self.number*=component
+			else:
+				isConvertable,errorMsg = convertableToSymbol(component)
+				if(isConvertable):
+					component = Symbol(component)
+					self.symbols[component] = self.symbols.get(component,0)+1
+				else:
+					raise Exception(f'Polynomial Terms cannot consist of: "{str(component)}" because {str(errorMsg)}')
+
+				
+				
+	def __mul__(self,other):
+		if(not isTerm(other)):
+			other = Term(other)
+		newTerm = Term()
+		newTerm.symbols = self.symbols.copy()
+		for sym in other.symbols:
+			newTerm.symbols[sym] = newTerm.symbols.get(sym,0)+other.symbols[sym]
+		#newTerm.symbols.update(other.symbols)
+		newTerm.number = self.number*other.number
+		return newTerm
+	def isAddableWith(self,other):
+		return self.symbols==other.symbols
+	def __add__(self,other):
+		assert self.isAddableWith(other)
+		newTerm = Term(self)
+		newTerm.number = self.number+other.number
+		return newTerm
+	def __sub__(self,other):
+		assert self.isAddableWith(other)
+		newTerm = Term(self)
+		newTerm.number = self.number-other.number
+		return newTerm
+	def __str__(self):
+		def convert(package):
+			sym,count = package
+			if(count==1):
+				return str(sym)
+			else:
+				return str(sym)+"^"+str(count)
+		l = [(key,self.symbols[key]) for key in self.symbols]
+		l.sort()
+		return repr(self.number)+''.join(map(convert,l))
+	def __repr__(self):
+		return str(self)
+	def defineSymbol(self,symbol,value):
+		self.number*=value**self.symbols[symbol]
+		self.symbols.pop(symbol)
+
+	def partialSolve(self,definitions):
+		for sym in list(self.symbols.keys()):
+			self.defineSymbol(sym,definitions[sym])
+	def solve(self,definitions):
+		for sym in self.symbols:
+			assert sym in definitions, f"Missing definition for symbol: {sym}"
+		self.partialSolve(definitions)
+
+
+class Polynomial():
+	def __init__(self,*args):
+		#self.markNeedsPruning()
+		if(len(args)==1 and isinstance(args[0],Polynomial)):
+			self.terms = copy.deepcopy(args[0].terms)
+		else:
+			self.terms = list(map(Term,args))
+		self.markNeedsPruning()
+	def __mul__(self,other):
+		self.prune()
+		self.markNeedsPruning()
+		newPoly = Polynomial()
+		for term1 in self.terms:
+			for term2 in other.terms:
+				newTerm = term1*term2
+				if(newTerm.number!=0):
+					newPoly.terms.append(newTerm)
+		return newPoly
+	def __add__(self,other):
+		self.markNeedsPruning()
+		if(isinstance(other,Polynomial)):
+			return Polynomial(*(self.terms+other.terms))
+		return self+Polynomial(other)
+	def __sub__(self,other):
+		self.markNeedsPruning()
+		if(isinstance(other,Polynomial)):
+			negTerms = other.terms.copy()
+			negTerms = [loopTerm*-1 for loopTerm in negTerms]
+			return Polynomial(*self.terms+negTerms)
+		return self-Polynomial(other)
+	def prune(self):
+		if self.isPruned:
+			return
+		self.isPruned = True
+		def sortingHelper(term):
+			#print(term.symbols.items())
+			return tuple(term.symbols.items())
+		self.terms.sort(key=sortingHelper)
+		i = 0
+		while(i<len(self.terms)-1):
+			if(self.terms[i].symbols==self.terms[i+1].symbols):
+				self.terms[i].number+=self.terms[i+1].number
+				self.terms.pop(i+1)
+			else:
+				i+=1
+		
+	def markNeedsPruning(self):
+		self.isPruned = False
+	def partialSolve(self, definitions):
+		self.markNeedsPruning()
+		definitions = dict(map(lambda package : (Symbol(package[0]),package[1]),definitions.items()))
+		for i in range(len(self.terms)):
+			self.terms[i].partialSolve(definitions)
+	def solve(self,definitions):
+		self.markNeedsPruning()
+		definitions = dict(map(lambda package : (Symbol(package[0]),package[1]),definitions.items()))
+		for i in range(len(self.terms)):
+			self.terms[i].solve(definitions)
+		self.prune()
+
+	def __str__(self):
+		self.prune()
+		return ' + '.join(map(str,self.terms))
+'''
+Can read one format:
+	Any number of sets of (A number followed by some number of single letter symbols) separated by '+'
+	10xy + 0e + 1232y
+
+'''
+def loadPolynomial(schem):
+	schem.replace(" ","")
+	schem.replace("*","")
+	temp_segments = schem.split("+")
+	segments = []
+	for seg in temp_segments:
+		neg_segs = seg.split("-")
+		for i in range(len(neg_segs)):
+			seg = neg_segs[i]
+			i+=1
+			if(i%2==1):
+				segments.append([seg,"positive"])
+			else:
+				segments.append([seg,"negative"])
+	for segment in segments:
+		numberCharacters = ""
+		for i in range(len(segment[0])):
+			char = segment[0][i]
+			if(char.isnumeric()):
+				numberCharacters+=char
+			else:
+				break
+		numberPart = int(numberCharacters) if len(numberCharacters)!=0 else 1
+		symbolsPart = list(segment[0][len(numberCharacters):])
+		segment[0] = symbolsPart+[numberPart]
+	terms = []
+	for seg in segments:
+		newTerm = Term(seg[0])
+		if(seg[1]=="negative"):
+			newTerm*=-1
+		terms.append(newTerm)
+	result = Polynomial(*terms)
+	return result
+
+
+def makeMandelbrotPolynomial(iteration):
+	c = Polynomial("c")
+	#print(c)
+	z = Polynomial(0)
+	for i in range(iteration):
+		z = (z*z)+c
+	return z
+def calculateMandelbrot(point :complex, iteration):
+	c = point
+	z = 0
+	for i in range(iteration):
+		z = z*z+c
+	return z
+import sympy
+def makeMandelbrotSympy(iteration):
+		c = sympy.var('c')
+		z = sympy.var('0')
+		for i in range(iteration):
+			z = z*z+c
+		return z
+
+point = complex(1,1)
+iteration = 10
+x = makeMandelbrotPolynomial(iteration)
+y = calculateMandelbrot(point,iteration)
+algrebraicRepr = Polynomial(x)
+x.solve({"c":point})
+solvedFromVariables = x
+
+solvedNormally = calculateMandelbrot(point,iteration)
+
+print(f"For the point ({point.real} {point.imag}) in the mandelbrot set after {iteration} iterations:")
+print(f"The algrebraic representation is: {algrebraicRepr}")
+print(f"Solving this representation yields: {solvedFromVariables}")
+print(f"Solving using a programmatic method yields: {solvedNormally}")
+exit()
